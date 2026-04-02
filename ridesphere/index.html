@@ -1,0 +1,195 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<title>RideSphere PRO</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+<style>
+body{margin:0;font-family:Segoe UI;background:#0b0f1a;color:white;}
+header{display:flex;justify-content:space-between;padding:15px;background:#111827;}
+.logo{color:#00e5a8;font-weight:bold;font-size:20px;}
+button{padding:10px;background:#00e5a8;border:none;border-radius:6px;cursor:pointer;margin-top:10px;font-weight:bold;}
+button:hover{transform:scale(1.03);}
+.page{display:none;padding:20px;}
+.active{display:block;}
+.panel{background:#111827;padding:20px;border-radius:10px;max-width:900px;margin:auto;}
+input,select{width:100%;padding:10px;margin-top:10px;background:#1c2333;border:none;border-radius:6px;color:white;}
+#map{height:420px;margin-top:10px;border-radius:10px;}
+table{width:100%;border-collapse:collapse;margin-top:15px;}
+td,th{border:1px solid #333;padding:6px;text-align:center;}
+.status{font-weight:bold;color:#00e5a8;}
+</style>
+</head>
+<body>
+<header>
+<div class="logo">RideSphere PRO</div>
+<button onclick="logout()" id="logoutBtn" style="display:none">Logout</button>
+</header>
+<!-- HOME -->
+<div id="homePage" class="page active">
+<div class="panel">
+<h2>Welcome to RideSphere</h2>
+<p>Your premium ride booking platform</p>
+<button onclick="showPage('loginPage')">Login</button>
+<button onclick="showPage('registerPage')">Register</button>
+</div>
+</div>
+<!-- LOGIN -->
+<div id="loginPage" class="page">
+<div class="panel">
+<h2>Login</h2>
+<select id="loginRole">
+<option>Rider</option>
+<option>Driver</option>
+<option>Admin</option>
+</select>
+<input id="loginEmail" placeholder="Email">
+<input id="loginPass" type="password" placeholder="Password">
+<button onclick="login()">Login</button>
+</div>
+</div>
+<!-- REGISTER -->
+<div id="registerPage" class="page">
+<div class="panel">
+<h2>Create Account</h2>
+<select id="regRole">
+<option>Rider</option>
+<option>Driver</option>
+<option>Admin</option>
+</select>
+<input id="regName" placeholder="Full Name">
+<input id="regEmail" placeholder="Email">
+<input id="regPass" placeholder="Password">
+<button onclick="register()">Register</button>
+</div>
+</div>
+<!-- RIDER PANEL -->
+<div id="riderPage" class="page">
+<div class="panel">
+<h2>Book a Ride</h2>
+<input id="pickupAddress" placeholder="Pickup Address">
+<button onclick="searchPickup()">Find Pickup</button>
+<button id="liveLocationBtn">Use Current Location</button>
+<p>Select drop by clicking on the map</p>
+<div id="map"></div>
+<p id="fareText"></p>
+<button onclick="estimateFare()">Estimate Fare</button>
+<button onclick="payAndRequestRide()">Pay & Request Ride</button>
+<p class="status" id="rideStatus"></p>
+</div>
+</div>
+<!-- DRIVER PANEL -->
+<div id="driverPage" class="page">
+<div class="panel">
+<h2>Driver Dashboard</h2>
+<p>Status: <span id="driverStatus">Offline</span></p>
+<button onclick="toggleDriver()">Toggle Online</button>
+<p>Total Trips: <span id="driverTrips">0</span></p>
+<p>Earnings ₹ <span id="driverEarn">0</span></p>
+<p>Wallet ₹ <span id="driverWallet">0</span></p>
+<button onclick="withdrawDriver()" id="withdrawBtn" style="display:none">Withdraw</button>
+<p id="driverRideRequest"></p>
+<button onclick="acceptRide()">Accept Ride</button>
+<button onclick="rejectRide()">Reject Ride</button>
+</div>
+</div>
+<!-- ADMIN PANEL -->
+<div id="adminPage" class="page">
+<div class="panel">
+<h2>Admin Dashboard</h2>
+<p>Drivers: <span id="adminDrivers"></span></p>
+<p>Riders: <span id="adminRiders"></span></p>
+<p>Total Rides: <span id="adminRides"></span></p>
+<p>Revenue ₹ <span id="adminRevenue"></span></p>
+<table id="rideLog">
+<tr><th>Date</th><th>Fare</th><th>Status</th></tr>
+</table>
+</div>
+</div>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>
+/* DATABASE */
+function db(k){return JSON.parse(localStorage.getItem(k)||"[]")}
+function save(k,v){localStorage.setItem(k,JSON.stringify(v))}
+
+/* DEFAULT ADMIN ACCOUNT */
+let users = db("users");
+if(!users.some(u=>u.role=="Admin")){
+    users.push({name:"Default Admin", email:"admin@ridesphere.com", pass:"admin123", role:"Admin", online:false});
+    save("users", users);
+}
+if(!localStorage.getItem('adminRevenue')) save('adminRevenue',0);
+
+/* PAGE SYSTEM */
+function showPage(id){document.querySelectorAll(".page").forEach(p=>p.classList.remove("active"));document.getElementById(id).classList.add("active")}
+
+/* REGISTER */
+function register(){
+    let users=db("users");
+    users.push({name:regName.value,email:regEmail.value,pass:regPass.value,role:regRole.value,online:false,wallet:0});
+    save("users",users);
+    alert("Account created");
+    showPage("loginPage");
+}
+
+/* LOGIN */
+function login(){
+    let users=db("users");
+    let u=users.find(x=>x.email==loginEmail.value && x.pass==loginPass.value && x.role==loginRole.value);
+    if(!u){alert("Invalid login");return}
+    logoutBtn.style.display="block";
+    if(u.role=="Rider"){showPage("riderPage");initMap()}
+    if(u.role=="Driver"){showPage("driverPage")}
+    if(u.role=="Admin"){showPage("adminPage");loadAdmin()}
+}
+
+/* MAP */
+let map,pickupMarker,dropMarker,fare=0,riderMarker,driverMarkers=[];
+function initMap(){
+    if(map) return;
+    map=L.map("map").setView([23.02,72.57],13);
+    L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png").addTo(map);
+    map.on('click', function(e){
+        if(!pickupMarker && !riderMarker){alert('Select pickup first'); return;}
+        if(dropMarker) map.removeLayer(dropMarker);
+        dropMarker = L.marker([e.latlng.lat, e.latlng.lng]).addTo(map).bindPopup('Drop Location').openPopup();
+        map.setView([e.latlng.lat, e.latlng.lng],14);
+    });
+}
+
+/* GEOCODE */
+async function geocode(addr){let r=await fetch("https://nominatim.openstreetmap.org/search?format=json&q="+addr);let d=await r.json();return d[0]}
+async function searchPickup(){let loc=await geocode(pickupAddress.value);if(pickupMarker) map.removeLayer(pickupMarker);pickupMarker=L.marker([loc.lat,loc.lon]).addTo(map);map.setView([loc.lat,loc.lon],14);}
+
+/* DISTANCE */
+function distance(a,b,c,d){let R=6371;let dLat=(c-a)*Math.PI/180;let dLon=(d-b)*Math.PI/180;let x=Math.sin(dLat/2)**2+Math.cos(a*Math.PI/180)*Math.cos(c*Math.PI/180)*Math.sin(dLon/2)**2;return R*2*Math.atan2(Math.sqrt(x),Math.sqrt(1-x))}
+
+/* FARE */
+function estimateFare(){if(!(pickupMarker||riderMarker)||!dropMarker){alert('Select pickup and drop');return}let p=riderMarker?riderMarker.getLatLng():pickupMarker.getLatLng(),d=dropMarker.getLatLng();let dist=distance(p.lat,p.lng,d.lat,d.lng);let surge=Math.random()*1.5+1;fare=Math.round(dist*20*surge);fareText.innerText="Estimated Fare ₹"+fare}
+
+/* LIVE LOCATION */
+document.getElementById('liveLocationBtn').onclick=function(){if(navigator.geolocation){navigator.geolocation.getCurrentPosition(pos=>{
+let lat=pos.coords.latitude,lon=pos.coords.longitude;if(riderMarker) map.removeLayer(riderMarker);riderMarker=L.marker([lat,lon]).addTo(map).bindPopup('You are here').openPopup();map.setView([lat,lon],14);
+},()=>alert('Could not get location'))}else alert('Geolocation not supported');}
+
+/* DRIVER */
+let online=false;
+function toggleDriver(){online = !online; driverStatus.innerText = online ? "Online" : "Offline"; let users = db('users'); let me = users.find(u=>u.email==loginEmail.value); me.online = online; if(!me.wallet) me.wallet = 0; if(!online && me.wallet > 0) withdrawBtn.style.display = 'block'; else withdrawBtn.style.display='none'; me.lat=23.02+Math.random()*0.05; me.lon=72.57+Math.random()*0.05; save('users',users);}
+function withdrawDriver(){let users = db('users'); let driver = users.find(u=>u.email==loginEmail.value); if(driver.wallet>0){let bank = prompt('Enter bank details for transfer'); alert(`₹${driver.wallet} transferred to bank: ${bank}`); driver.wallet=0; save('users',users); driverWallet.innerText=0; withdrawBtn.style.display='none';} else alert('No balance to withdraw');}
+
+/* SPAWN DRIVERS */
+function spawnDrivers(){driverMarkers.forEach(m=>map.removeLayer(m));driverMarkers=[];let drivers=db('users').filter(u=>u.role=='Driver'&&u.online);drivers.forEach(d=>{let m=L.marker([d.lat,d.lon],{icon:L.icon({iconUrl:'https://cdn-icons-png.flaticon.com/512/1946/1946429.png',iconSize:[25,41]})}).addTo(map).bindPopup(`Driver: ${d.name}`);driverMarkers.push(m);});}
+setInterval(spawnDrivers,5000);
+function nearestDriver(lat,lon){let drivers=db('users').filter(u=>u.role=='Driver'&&u.online);if(drivers.length==0)return null;let minDist=Infinity,nearest=null;drivers.forEach(d=>{let dist=distance(lat,lon,d.lat,d.lon);if(dist<minDist){minDist=dist;nearest=d;}});return nearest;}
+
+/* RIDE & PAYMENT */
+function payAndRequestRide(){if(!(riderMarker||pickupMarker)||!dropMarker){alert('Select pickup and drop'); return;} let confirmed = confirm(`Pay ₹${fare} online?`); if(!confirmed) return; let adminRev = Number(db('adminRevenue')||0); adminRev += fare*0.25; save('adminRevenue',adminRev); let riderLoc = riderMarker?riderMarker.getLatLng():pickupMarker.getLatLng(); let driver = nearestDriver(riderLoc.lat,riderLoc.lng); if(!driver){rideStatus.innerText='No online drivers nearby'; return;} driver.wallet = (driver.wallet||0) + fare*0.75; let users = db('users'); let index = users.findIndex(u=>u.email==driver.email); users[index] = driver; save('users',users); rideStatus.innerText = `Driver ${driver.name} assigned!`; L.polyline([[riderLoc.lat,riderLoc.lng],[dropMarker.getLatLng().lat,dropMarker.getLatLng().lng]],{color:'green'}).addTo(map); let rides = db('rides')||[]; rides.push({date:new Date().toLocaleString(),fare:fare,status:'Completed',rider:loginEmail.value,driver:driver.name}); save('rides',rides); driverTrips.innerText = Number(driverTrips.innerText)+1; driverEarn.innerText = driver.wallet;}
+
+/* ADMIN */
+function loadAdmin(){let users=db("users"); adminDrivers.innerText=users.filter(u=>u.role=="Driver").length; adminRiders.innerText=users.filter(u=>u.role=="Rider").length; let rides=db("rides"); adminRides.innerText=rides.length; let rev = Number(db('adminRevenue')||0); adminRevenue.innerText=rev; rideLog.innerHTML+=rides.map(r=>`<tr><td>${r.date}</td><td>${r.fare}</td><td>${r.status}</td></tr>`).join("");}
+
+/* LOGOUT */
+function logout(){location.reload()}
+</script>
+</body>
+</html>
